@@ -17,3 +17,8 @@ variable "instance_capacity_type" {
   type    = string
   default = "SPOT"
 }
+
+variable "region" {
+  type    = string
+  default = "us-east-1"
+}
