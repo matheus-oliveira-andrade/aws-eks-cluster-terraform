@@ -14,8 +14,17 @@ module "vpc" {
   single_nat_gateway   = true
   enable_dns_hostnames = true
 
+  private_subnet_tags = {
+    "kubernetes.io/role/internal-elb" : "1"
+  }
+
+  public_subnet_tags = {
+    "kubernetes.io/role/elb" = "1"
+  }
+
   tags = {
-    env = "dev"
+    env                                         = "dev"
+    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
   }
 }
 
@@ -31,6 +40,8 @@ module "eks" {
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
+
+  enable_irsa = true
 
   eks_managed_node_group_defaults = {
   }
@@ -62,3 +73,191 @@ module "eks" {
     env = "dev"
   }
 }
+
+### BEGIN AWS LOAD BALANCER CONTROLLER
+
+## PERMISSIONS TO ALB CONTROLLER POLICY
+data "local_file" "alb_controller_permissions" {
+  filename = "alb_controller_permissions.json"
+}
+
+## POLICY TO ALB INGRESS CONTROLLER
+resource "aws_iam_policy" "alb_ingress_controller_policy" {
+  name        = "ALBIngressControllerIAMPolicy"
+  description = "Policy which will be used by role for service - for creating alb from within cluster by issuing declarative kube commands"
+  policy      = data.local_file.alb_controller_permissions.content
+}
+
+# ROLE TO ALB INGRESS CONTROLLER
+resource "aws_iam_role" "alb-ingress-controller-role" {
+  name = "alb-ingress-controller"
+
+  assume_role_policy = <<POLICY
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "",
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "${module.eks.oidc_provider_arn}"     
+},
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "${replace(module.eks.oidc_provider, "https://", "")}:sub": "system:serviceaccount:kube-system:alb-ingress-controller",
+          "${replace(module.eks.oidc_provider, "https://", "")}:aud": "sts.amazonaws.com"
+        }
+      }
+    }
+  ]
+}
+POLICY
+
+  depends_on = [module.eks.oidc_provider]
+
+  tags = {
+    "ServiceAccountName"      = "alb-ingress-controller"
+    "ServiceAccountNameSpace" = "kube-system"
+  }
+}
+
+# Attach policies to IAM role
+resource "aws_iam_role_policy_attachment" "alb-ingress-controller-role-ALBIngressControllerIAMPolicy" {
+  policy_arn = aws_iam_policy.alb_ingress_controller_policy.arn
+  role       = aws_iam_role.alb-ingress-controller-role.name
+  depends_on = [aws_iam_role.alb-ingress-controller-role]
+}
+
+resource "aws_iam_role_policy_attachment" "alb-ingress-controller-role-AmazonEKS_CNI_Policy" {
+  role       = aws_iam_role.alb-ingress-controller-role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+  depends_on = [aws_iam_role.alb-ingress-controller-role]
+}
+
+provider "kubernetes" {
+  host                   = module.eks.cluster_endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args = [
+      "eks",
+      "get-token",
+      "--cluster-name",
+      module.eks.cluster_name
+    ]
+  }
+}
+
+resource "kubernetes_service_account" "alb-ingress-controller-sa" {
+  metadata {
+    name      = "alb-ingress-controller"
+    namespace = "kube-system"
+    annotations = {
+      "eks.amazonaws.com/role-arn" = aws_iam_role.alb-ingress-controller-role.arn
+    }
+    labels = {
+      "app.kubernetes.io/name" = "alb-ingress-controller"
+    }
+  }
+}
+
+resource "kubernetes_cluster_role" "alb_ingress_controller" {
+  metadata {
+    labels = {
+      "app.kubernetes.io/name" = "alb-ingress-controller"
+    }
+    name = "alb-ingress-controller"
+  }
+
+  rule {
+    api_groups = [""]
+    resources = [
+      "configmaps",
+      "endpoints",
+      "events",
+      "ingresses",
+      "ingresses/status",
+      "services",
+      "pods/status",
+    ]
+    verbs = ["create", "get", "list", "update", "watch", "patch"]
+  }
+
+  rule {
+    api_groups = [""]
+    resources = [
+      "nodes",
+      "pods",
+      "secrets",
+      "services",
+      "namespaces",
+    ]
+    verbs = ["get", "list", "watch"]
+  }
+}
+
+resource "kubernetes_cluster_role_binding" "alb_ingress_controller" {
+  metadata {
+    labels = {
+      "app.kubernetes.io/name" = "alb-ingress-controller"
+    }
+    name = "alb-ingress-controller"
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "ClusterRole"
+    name      = kubernetes_cluster_role.alb_ingress_controller.metadata[0].name
+  }
+
+  subject {
+    kind      = "ServiceAccount"
+    name      = "alb-ingress-controller"
+    namespace = "kube-system"
+  }
+}
+
+
+provider "helm" {
+  kubernetes {
+    host                   = module.eks.cluster_endpoint
+    cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+    exec {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args = [
+        "eks",
+        "get-token",
+        "--cluster-name",
+        module.eks.cluster_name
+      ]
+    }
+  }
+}
+
+
+resource "helm_release" "aws_load_balancer_controller" {
+  name       = "aws-load-balancer-controller"
+  repository = "https://aws.github.io/eks-charts"
+  chart      = "aws-load-balancer-controller"
+  namespace  = "kube-system"
+
+  set {
+    name  = "clusterName"
+    value = module.eks.cluster_name
+  }
+
+  set {
+    name  = "serviceAccount.create"
+    value = "false"
+  }
+
+  set {
+    name  = "serviceAccount.name"
+    value = "alb-ingress-controller"
+  }
+}
+
+### END AWS LOAD BALANCER CONTROLLER
