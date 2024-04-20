@@ -1,34 +1,55 @@
 ### AWS EKS Cluster Setup with Terraform
 
-Creates an AWS EKS cluster with one node using spot instance
+Create an AWS EKS cluster with addons (coredns, kube-proxy and vpc-cni) and VPC using terraform modules [terraform-aws-modules/eks/aws](https://github.com/terraform-aws-modules/terraform-aws-eks) and [terraform-aws-modules/vpc/aws](https://github.com/terraform-aws-modules/terraform-aws-vpc) and configure aws load balancer controller 
 
 ### Requirements
 
 To create resources you will need:
   - [Terraform](https://developer.hashicorp.com/terraform/tutorials/aws-get-started/install-cli)
   - [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html#getting-started-install-instructions)
+  - [kubectl](https://kubernetes.io/docs/tasks/tools/#kubectl)
 
 ### How run 
 
-1 - Check if AWS credentials are updated
-  ```sh
-  > aws s3 ls --profile dev
-  output:
-  2023-10-18 19:51:18 0occ8l-ukk5id
-  2023-01-14 20:11:41 2v8gh8-e8x3cur
-  ```
+1 - Creation of resources
 
-2 - Download modules used in [`main.tf`](main.tf)
-  ```sh
-  > terraform init
-  ```
+  * Check for terraform remote backend in s3 exists
 
-3 - See resources will be created
-  ```sh
-  > terraform plan
-  ```
+     is required exist a s3 with name expected in [version.tf](versions.tf)
+     ```sh
+     aws s3 ls --profile default
+     # Example output:
+     # 2023-10-18 19:51:18 terraform-state-516735145595     
+     ``` 
 
-4 - Create resources
-  ```sh
-  > terraform apply
-  ```
+  * Download modules used in [`main.tf`](main.tf)
+    ```sh
+    terraform init
+    ```
+
+  * Preview the resources that will be created
+    ```sh
+    terraform plan
+    ```
+
+  * Create the resources
+    ```sh
+    # Estimated time to create all resources: 20 minutes
+    terraform apply 
+    ```
+
+2 - Update kubeconfig File
+
+Update your kubeconfig file to access the created cluster
+```sh
+# update config file in ~/.kube
+aws eks update-kubeconfig --name apps --region us-east-1
+```
+
+3 - Communicate with the Cluster
+
+Use kubectl to interact with your cluster
+```sh
+# get all resources created in kubernetes
+kubectl get all -A
+```
