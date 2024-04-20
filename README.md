@@ -1,6 +1,6 @@
 ### AWS EKS Cluster Setup with Terraform
 
-Create an AWS EKS cluster with addons (coredns, kube-proxy and vpc-cni) and VPC using terraform modules [terraform-aws-modules/eks/aws](https://github.com/terraform-aws-modules/terraform-aws-eks) and [terraform-aws-modules/vpc/aws](https://github.com/terraform-aws-modules/terraform-aws-vpc) and configure aws load balancer controller 
+Setting up an AWS EKS cluster with addons like coredns, kube-proxy, and vpc-cni, utilizing terraform modules [terraform-aws-modules/eks/aws](https://github.com/terraform-aws-modules/terraform-aws-eks) and [terraform-aws-modules/vpc/aws](https://github.com/terraform-aws-modules/terraform-aws-vpc). It  also includes configuring the AWS load balancer controller
 
 ### Requirements
 
