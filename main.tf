@@ -76,7 +76,7 @@ module "eks" {
   }
 }
 
-module "alb-controller" {
+module "aws-load-balancer" {
   source = "./aws-load-balancer"
 
   oidc_provider     = module.eks.oidc_provider
